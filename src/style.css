@@ -63,3 +63,27 @@ button:active:not(:disabled) { transform: translateY(1px); }
 #rank-list li .score { font-weight: bold; }
 #rank-list li .meta { grid-column: 2 / 4; font-size: 11px; color: #a88a6a; }
 #rank-list li.me { background: #ffe3ea; border-radius: 8px; }
+
+/* 顔ピース一覧 */
+#face-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.slot {
+  border: 2px solid #e3cdb0; border-radius: 12px; padding: 6px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px; background: #fff;
+}
+.slot .thumb {
+  width: 64px; height: 64px; display: flex; align-items: center; justify-content: center;
+}
+.slot .thumb img { max-width: 64px; max-height: 64px; }
+.slot .thumb.empty {
+  border: 2px dashed #d8bf9f; border-radius: 50%; font-size: 11px; color: #b89470; box-sizing: border-box;
+}
+.slot .lv { font-weight: bold; font-size: 13px; }
+.slot .acts { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
+.slot .acts button { font-size: 12px; padding: 4px 7px; border-radius: 8px; }
+
+/* 切り抜き調整 */
+.panel.editor { width: 90%; max-width: 380px; gap: 8px; }
+.editor-wrap { width: 100%; }
+#editor-canvas { border-radius: 10px; touch-action: none; display: block; }
+.row { display: flex; gap: 6px; }
+.row button { flex: 1; padding: 9px 4px; font-size: 14px; }

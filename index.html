@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <title>KANNA — 顔合体パズル</title>
+  <link rel="icon" href="data:,">
   <link rel="stylesheet" href="src/style.css">
 </head>
 <body>
@@ -18,7 +19,7 @@
           <p class="sub">顔合体パズル</p>
           <button id="btn-start" class="primary">スタート</button>
           <button id="btn-rank">ランキング</button>
-          <button disabled>顔ピース登録（準備中）</button>
+          <button id="btn-faces">顔ピース登録</button>
         </div>
       </section>
 
@@ -53,11 +54,44 @@
           <button id="btn-rank-title">タイトルへ</button>
         </div>
       </section>
+
+      <!-- 顔ピース一覧 -->
+      <section id="scr-faces" class="screen">
+        <div class="panel">
+          <h2>顔ピース登録</h2>
+          <p class="note">レベルごとに写真を登録すると、顔の形のピースになります。写真は端末の中だけで使われます。</p>
+          <div id="face-grid"></div>
+          <button id="btn-faces-back" class="primary">タイトルへ</button>
+        </div>
+      </section>
+
+      <!-- 切り抜き調整 -->
+      <section id="scr-editor" class="screen">
+        <div class="panel editor">
+          <h2 id="editor-title">切り抜き</h2>
+          <div class="editor-wrap"><canvas id="editor-canvas"></canvas></div>
+          <p class="note" id="editor-status"></p>
+          <div class="row">
+            <button id="ed-smaller">縮小</button>
+            <button id="ed-bigger">拡大</button>
+            <button id="ed-fit">枠を中央</button>
+            <button id="ed-auto">自動</button>
+          </div>
+          <div class="row">
+            <button id="ed-cancel">やめる</button>
+            <button id="ed-save" class="primary">保存</button>
+          </div>
+        </div>
+      </section>
     </div>
   </div>
+  <input type="file" id="face-file" accept="image/*" hidden>
 
+  <script src="vendor/decomp.min.js"></script>
   <script src="vendor/matter.min.js"></script>
+  <script src="src/screens.js"></script>
   <script src="src/ranking.js"></script>
+  <script src="src/faces.js"></script>
   <script src="src/game.js"></script>
 </body>
 </html>

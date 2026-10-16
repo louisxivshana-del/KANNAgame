@@ -1,9 +1,10 @@
-// KANNA — 顔合体パズル v0.1
-// 写真なしピース（四角・丸・三角・しずく）で遊べる合体パズルの土台。
+// KANNA — 顔合体パズル v0.3
+// 顔写真を登録したレベルは切り抜きの形、未登録のレベルは四角・丸・三角・しずくのピース。
 (() => {
   'use strict';
 
-  const { Engine, Bodies, Body, Composite, Events } = Matter;
+  const { Engine, Bodies, Body, Composite, Events, Common, Vertices } = Matter;
+  if (window.decomp) Common.setDecomp(window.decomp); // 凹みのある顔の形を分割して計算する
 
   // ---- 画面（論理座標） ----
   const W = 400, H = 760;
@@ -22,10 +23,12 @@
   const MERGE_SCORE = [0, 1, 3, 6, 10, 15, 21, 28];                 // LvN+LvN → N+1
   const VANISH_SCORE = 50;                                          // Lv8+Lv8
   const SHAPES = ['square', 'circle', 'triangle', 'drop'];
+  const PHOTO_POINTS = 14;  // 顔ピースの当たり判定の点の数（軽さ優先で間引く）
 
   // ---- 状態 ----
   let engine, state, score, best = Ranking.best();
   let levelShape, templates;   // レベルごとの形（ゲーム開始時にランダム決定）
+  let photoGeo;                // 顔ピースの形（ゲーム開始時に計算）
   let current, next, dropX, dropAngle, cooldown;
   let mergeQueue, particles, popups, overTimer, overAnim, now = 0;
   let maxReached, playTime, resultShown;
@@ -62,11 +65,30 @@
     return [-90, 30, 150].map(d => ({ x: R * Math.cos(d * Math.PI / 180), y: R * Math.sin(d * Math.PI / 180) }));
   }
 
+  // 顔の切り抜きから、当たり判定の頂点と描画用の情報を作る。
+  // 面積が同じレベルの円と同じになるよう拡大縮小する。
+  function buildPhotoGeo(level, face) {
+    let pts = Faces.resample(face.poly, PHOTO_POINTS);
+    if (Faces.area(pts) < 0) pts = pts.reverse();
+    if (Faces.selfIntersects(pts)) pts = Vertices.hull(pts.map(p => ({ x: p.x, y: p.y })));
+    const r = RADIUS[level];
+    const k = Math.sqrt((Math.PI * r * r) / Math.abs(Faces.area(pts)));
+    const c = Faces.centroid(pts);
+    const tr = (p) => ({ x: (p.x - c.x) * k, y: (p.y - c.y) * k });
+    return {
+      img: face.img,
+      verts: pts.map(tr),
+      outline: face.poly.map(tr),
+      ox: -c.x * k, oy: -c.y * k, dw: face.w * k, dh: face.h * k,
+    };
+  }
+
   function makeBody(level, x, y, angle = 0) {
     const r = RADIUS[level];
     const opts = { restitution: 0.08, friction: 0.35, frictionStatic: 0.6, frictionAir: 0.012, density: 0.0012 };
     let body;
     switch (levelShape[level]) {
+      case 'photo': body = Bodies.fromVertices(x, y, [photoGeo[level].verts.map(v => ({ ...v }))], opts); break;
       case 'circle': body = Bodies.circle(x, y, r, opts, 14); break;
       case 'square': body = Bodies.rectangle(x, y, r * 1.75, r * 1.75, opts); break;
       case 'triangle': body = Bodies.fromVertices(x, y, [triangleVertices(r * 1.5)], opts); break;
@@ -83,6 +105,10 @@
   function buildTemplates() {
     templates = [null];
     for (let lv = 1; lv <= MAX_LEVEL; lv++) {
+      if (levelShape[lv] === 'photo') {
+        templates.push({ photo: true, r: RADIUS[lv], ...photoGeo[lv] });
+        continue;
+      }
       const b = makeBody(lv, 0, 0, 0);
       templates.push({
         circle: levelShape[lv] === 'circle',
@@ -118,7 +144,12 @@
     Events.on(engine, 'collisionActive', onCollide);
 
     levelShape = [null];
-    for (let lv = 1; lv <= MAX_LEVEL; lv++) levelShape.push(SHAPES[randInt(0, SHAPES.length - 1)]);
+    photoGeo = [null];
+    for (let lv = 1; lv <= MAX_LEVEL; lv++) {
+      const face = Faces.get(lv);
+      photoGeo.push(face ? buildPhotoGeo(lv, face) : null);
+      levelShape.push(face ? 'photo' : SHAPES[randInt(0, SHAPES.length - 1)]);
+    }
     buildTemplates();
 
     state = play ? 'play' : 'title';
@@ -330,6 +361,17 @@
     ctx.translate(x, y);
     ctx.rotate(angle);
     ctx.scale(s, s);
+    if (t.photo) {
+      // 顔ピース：切り抜き画像＋レベル色のふち（数字は書かない）
+      ctx.drawImage(t.img, t.ox, t.oy, t.dw, t.dh);
+      ctx.beginPath();
+      Faces.tracePath(ctx, t.outline);
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = COLOR[level];
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
     ctx.beginPath();
     if (t.circle) ctx.arc(0, 0, t.r, 0, Math.PI * 2);
     else {
@@ -349,7 +391,6 @@
     ctx.fill();
     ctx.restore();
     // レベル数字（回転させない）。顔写真を登録したレベルには表示しない
-    if (t.photo) return;
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.fillStyle = shade(COLOR[level], 0.45);
@@ -473,12 +514,9 @@
   // ---- 画面（タイトル・リザルト・ランキング） ----
   const UI = (() => {
     const $ = (id) => document.getElementById(id);
-    const screens = ['scr-title', 'scr-result', 'scr-ranking'];
     let lastEntry = null; // 直前に登録した記録（ランキングで強調）
 
-    function show(id) {
-      for (const s of screens) $(s).classList.toggle('show', s === id);
-    }
+    const show = Screens.show;
 
     function start() {
       initAudio();
@@ -545,6 +583,7 @@
 
     $('btn-start').addEventListener('click', start);
     $('btn-rank').addEventListener('click', () => { lastEntry = null; showRanking(); });
+    $('btn-faces').addEventListener('click', () => Faces.openManager(showTitle));
     $('rankin').addEventListener('submit', submitName);
     $('btn-retry').addEventListener('click', start);
     $('btn-res-rank').addEventListener('click', () => { lastEntry = null; showRanking(); });
@@ -566,8 +605,10 @@
   }
 
   resize();
-  UI.showTitle();
-  requestAnimationFrame(frame);
+  Faces.init().finally(() => {
+    UI.showTitle();
+    requestAnimationFrame(frame);
+  });
 
   // テスト・デバッグ用
   window.__kanna = {
