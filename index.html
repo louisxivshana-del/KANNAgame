@@ -4,15 +4,60 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <title>KANNA — 顔合体パズル</title>
-  <style>
-    html, body { margin: 0; height: 100%; background: #f6e7cf; overflow: hidden; }
-    body { display: flex; align-items: center; justify-content: center; }
-    canvas { display: block; touch-action: none; user-select: none; -webkit-user-select: none; }
-  </style>
+  <link rel="stylesheet" href="src/style.css">
 </head>
 <body>
-  <canvas id="game"></canvas>
+  <div id="stage">
+    <canvas id="game"></canvas>
+
+    <div id="ui">
+      <!-- タイトル -->
+      <section id="scr-title" class="screen">
+        <div class="panel">
+          <h1>KANNA</h1>
+          <p class="sub">顔合体パズル</p>
+          <button id="btn-start" class="primary">スタート</button>
+          <button id="btn-rank">ランキング</button>
+          <button disabled>顔ピース登録（準備中）</button>
+        </div>
+      </section>
+
+      <!-- リザルト -->
+      <section id="scr-result" class="screen">
+        <div class="panel">
+          <h2>GAME OVER</h2>
+          <p class="big" id="res-score">0</p>
+          <p class="note" id="res-detail"></p>
+          <form id="rankin" autocomplete="off">
+            <p class="rankin-title" id="rankin-title">ランクイン！</p>
+            <label for="name-input">名前を入力してください</label>
+            <input id="name-input" maxlength="10" placeholder="なまえ" enterkeyhint="done">
+            <button type="submit" class="primary">登録する</button>
+          </form>
+          <div id="res-buttons">
+            <p class="note" id="res-best"></p>
+            <button id="btn-retry" class="primary">もう一度</button>
+            <button id="btn-res-rank">ランキング</button>
+            <button id="btn-res-title">タイトルへ</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ランキング -->
+      <section id="scr-ranking" class="screen">
+        <div class="panel">
+          <h2>ランキング</h2>
+          <ol id="rank-list"></ol>
+          <p class="note" id="rank-empty">まだ記録がありません</p>
+          <button id="btn-rank-play" class="primary">遊ぶ</button>
+          <button id="btn-rank-title">タイトルへ</button>
+        </div>
+      </section>
+    </div>
+  </div>
+
   <script src="vendor/matter.min.js"></script>
+  <script src="src/ranking.js"></script>
   <script src="src/game.js"></script>
 </body>
 </html>

@@ -22,13 +22,13 @@
   const MERGE_SCORE = [0, 1, 3, 6, 10, 15, 21, 28];                 // LvN+LvN → N+1
   const VANISH_SCORE = 50;                                          // Lv8+Lv8
   const SHAPES = ['square', 'circle', 'triangle', 'drop'];
-  const BEST_KEY = 'kanna.best';
 
   // ---- 状態 ----
-  let engine, state, score, best = loadBest();
+  let engine, state, score, best = Ranking.best();
   let levelShape, templates;   // レベルごとの形（ゲーム開始時にランダム決定）
   let current, next, dropX, dropAngle, cooldown;
-  let mergeQueue, particles, popups, overTimer, overAnim, newBest, now = 0;
+  let mergeQueue, particles, popups, overTimer, overAnim, now = 0;
+  let maxReached, playTime, resultShown;
 
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
@@ -38,8 +38,6 @@
   const rand = (a, b) => a + Math.random() * (b - a);
   const randInt = (a, b) => Math.floor(rand(a, b + 1));
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  function loadBest() { try { return Number(localStorage.getItem(BEST_KEY)) || 0; } catch { return 0; } }
-  function saveBest(v) { try { localStorage.setItem(BEST_KEY, String(v)); } catch { /* ignore */ } }
 
   // ---- 形の生成 ----
   // しずく型：x = sin t · sin(t/2), y = -cos t（先端が上）。凸形なので分割不要。
@@ -104,7 +102,8 @@
   }
 
   // ---- ゲーム進行 ----
-  function newGame() {
+  // play=false のときは盤面だけ用意してタイトル表示
+  function newGame(play = true) {
     if (engine) { Composite.clear(engine.world, false); Engine.clear(engine); }
     engine = Engine.create({ positionIterations: 6, velocityIterations: 4 });
     engine.gravity.y = 1.3;
@@ -122,10 +121,12 @@
     for (let lv = 1; lv <= MAX_LEVEL; lv++) levelShape.push(SHAPES[randInt(0, SHAPES.length - 1)]);
     buildTemplates();
 
-    state = 'play';
+    state = play ? 'play' : 'title';
     score = 0;
     mergeQueue = []; particles = []; popups = [];
-    overTimer = 0; overAnim = 0; newBest = false;
+    overTimer = 0; overAnim = 0;
+    maxReached = 0; playTime = 0; resultShown = false;
+    best = Ranking.best();
     current = randInt(1, 3);
     next = randInt(1, 3);
     dropAngle = rand(-0.4, 0.4);
@@ -138,6 +139,7 @@
     const hw = halfWidth(current, dropAngle);
     const x = clamp(dropX, WALL_L + hw, WALL_R - hw);
     Composite.add(engine.world, makeBody(current, x, DROP_Y, dropAngle));
+    maxReached = Math.max(maxReached, current);
     sound(220 + current * 40, 0.06, 'triangle', 0.08);
     current = next;
     next = randInt(1, 3);
@@ -170,6 +172,7 @@
         const hw = halfWidth(lv + 1, nb.angle);
         Body.setPosition(nb, { x: clamp(x, WALL_L + hw, WALL_R - hw), y: Math.min(y, FLOOR - RADIUS[lv + 1]) });
         Composite.add(engine.world, nb);
+        maxReached = Math.max(maxReached, lv + 1);
         addScore(MERGE_SCORE[lv], x, y);
         burst(x, y, COLOR[lv + 1], 10 + lv * 2);
         sound(330 * Math.pow(1.12, lv), 0.14, 'sine', 0.12);
@@ -200,7 +203,6 @@
     if (worst >= OVER_LIMIT) {
       state = 'over';
       overAnim = 0;
-      if (score > best) { best = score; saveBest(best); newBest = true; }
       sound(300, 0.8, 'sawtooth', 0.1, 120);
     }
   }
@@ -239,7 +241,7 @@
   let pointerDown = false;
   canvas.addEventListener('pointerdown', (e) => {
     initAudio();
-    if (state === 'over') { if (overAnim > 0.8) newGame(); return; }
+    if (state !== 'play') return;
     pointerDown = true;
     dropX = toLogical(e).x;
   });
@@ -254,12 +256,12 @@
   });
   canvas.addEventListener('pointercancel', () => { pointerDown = false; });
   window.addEventListener('keydown', (e) => {
+    if (e.target instanceof HTMLInputElement) return; // 名前入力中はゲーム操作しない
     initAudio();
     keys.add(e.code);
     if (['Space', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
     if (e.repeat) return;
-    if (state === 'over' && (e.code === 'Enter' || e.code === 'Space') && overAnim > 0.8) newGame();
-    else if (e.code === 'Space' || e.code === 'ArrowDown' || e.code === 'Enter') dropPiece();
+    if (state === 'play' && (e.code === 'Space' || e.code === 'ArrowDown' || e.code === 'Enter')) dropPiece();
   });
   window.addEventListener('keyup', (e) => keys.delete(e.code));
 
@@ -270,6 +272,7 @@
     const dt = dtMs / 1000;
     now += dt;
     if (state === 'play') {
+      playTime += dt;
       if (keys.has('ArrowLeft') || keys.has('KeyA')) dropX -= 320 * dt;
       if (keys.has('ArrowRight') || keys.has('KeyD')) dropX += 320 * dt;
       const hw = halfWidth(current, dropAngle);
@@ -286,8 +289,9 @@
       }
       if (steps === 3) acc = 0;
       checkOver(dt);
-    } else {
+    } else if (state === 'over') {
       overAnim += dt;
+      if (!resultShown && overAnim > 0.9) { resultShown = true; UI.showResult(); }
     }
 
     for (let i = particles.length - 1; i >= 0; i--) {
@@ -456,23 +460,100 @@
   }
 
   function drawOver() {
-    ctx.fillStyle = 'rgba(60,35,15,0.55)';
+    if (resultShown) return; // リザルト画面（HTML）が出たらそちらに任せる
+    ctx.fillStyle = `rgba(60,35,15,${Math.min(0.45, overAnim)})`;
     ctx.fillRect(0, 0, W, H);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = '#fff';
-    ctx.font = 'bold 36px sans-serif';
-    ctx.fillText('GAME OVER', W / 2, H / 2 - 70);
-    ctx.font = 'bold 22px sans-serif';
-    ctx.fillText(`SCORE ${score}`, W / 2, H / 2 - 20);
-    ctx.font = '16px sans-serif';
-    ctx.fillStyle = '#ffe066';
-    ctx.fillText(newBest ? '★ ベスト更新！' : `BEST ${best}`, W / 2, H / 2 + 14);
-    if (overAnim > 0.8 && Math.floor(now * 2) % 2 === 0) {
-      ctx.fillStyle = '#fff';
-      ctx.fillText('タップ / Enter でもう一度', W / 2, H / 2 + 60);
-    }
+    ctx.font = 'bold 40px sans-serif';
+    ctx.fillText('GAME OVER', W / 2, H / 2);
   }
+
+  // ---- 画面（タイトル・リザルト・ランキング） ----
+  const UI = (() => {
+    const $ = (id) => document.getElementById(id);
+    const screens = ['scr-title', 'scr-result', 'scr-ranking'];
+    let lastEntry = null; // 直前に登録した記録（ランキングで強調）
+
+    function show(id) {
+      for (const s of screens) $(s).classList.toggle('show', s === id);
+    }
+
+    function start() {
+      initAudio();
+      show(null);
+      newGame(true);
+    }
+
+    function showTitle() {
+      newGame(false);
+      show('scr-title');
+    }
+
+    function showResult() {
+      $('res-score').textContent = score;
+      $('res-detail').textContent = `最高 Lv${maxReached} ・ ${Math.floor(playTime / 60)}分${Math.floor(playTime % 60)}秒`;
+      const rank = Ranking.rankOf(score);
+      $('rankin').hidden = rank < 0;
+      $('res-buttons').hidden = rank >= 0;
+      if (rank >= 0) {
+        $('rankin-title').textContent = `ランクイン！ ${rank + 1}位`;
+        $('name-input').value = Ranking.lastName();
+      } else {
+        $('res-best').textContent = `ベスト ${best}`;
+      }
+      show('scr-result');
+      if (rank >= 0) setTimeout(() => $('name-input').focus(), 50);
+    }
+
+    function submitName(e) {
+      e.preventDefault();
+      const name = $('name-input').value.trim().slice(0, 10) || 'ななし';
+      lastEntry = { name, score, maxLevel: maxReached, date: Date.now() };
+      Ranking.add(lastEntry);
+      best = Ranking.best();
+      $('name-input').blur();
+      showRanking();
+    }
+
+    function showRanking() {
+      const list = Ranking.load();
+      const ol = $('rank-list');
+      ol.textContent = '';
+      list.forEach((e, i) => {
+        const li = document.createElement('li');
+        if (lastEntry && e.date === lastEntry.date && e.score === lastEntry.score) li.className = 'me';
+        const d = new Date(e.date);
+        const cells = [
+          ['pos', `${i + 1}`],
+          ['name', e.name],
+          ['score', `${e.score}`],
+          ['meta', `最高 Lv${e.maxLevel || '-'} ・ ${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`],
+        ];
+        for (const [cls, text] of cells) {
+          const span = document.createElement('span');
+          span.className = cls;
+          span.textContent = text; // 名前はテキストとして表示（HTMLとして解釈しない）
+          li.appendChild(span);
+        }
+        ol.appendChild(li);
+      });
+      $('rank-empty').hidden = list.length > 0;
+      show('scr-ranking');
+    }
+
+    $('btn-start').addEventListener('click', start);
+    $('btn-rank').addEventListener('click', () => { lastEntry = null; showRanking(); });
+    $('rankin').addEventListener('submit', submitName);
+    $('btn-retry').addEventListener('click', start);
+    $('btn-res-rank').addEventListener('click', () => { lastEntry = null; showRanking(); });
+    $('btn-res-title').addEventListener('click', showTitle);
+    $('btn-rank-play').addEventListener('click', start);
+    $('btn-rank-title').addEventListener('click', showTitle);
+
+    return { showTitle, showResult };
+  })();
 
   // ---- メインループ ----
   let last = performance.now();
@@ -485,7 +566,7 @@
   }
 
   resize();
-  newGame();
+  UI.showTitle();
   requestAnimationFrame(frame);
 
   // テスト・デバッグ用
@@ -495,6 +576,7 @@
     get pieces() { return Composite.allBodies(engine.world).filter(b => b.level).length; },
     get maxLevel() { return Math.max(0, ...Composite.allBodies(engine.world).map(b => b.level || 0)); },
     get shapes() { return levelShape.slice(1); },
+    forceOver() { overTimer = OVER_LIMIT; state = 'over'; overAnim = 0; },
     drop(x) { dropX = x; dropPiece(); },
     spawn(level, x, y) { Composite.add(engine.world, makeBody(level, x, y)); },
   };
