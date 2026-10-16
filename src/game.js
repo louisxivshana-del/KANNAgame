@@ -344,7 +344,8 @@
     ctx.ellipse(-t.r * 0.3, -t.r * 0.35, t.r * 0.22, t.r * 0.13, -0.6, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
-    // レベル数字（回転させない）
+    // レベル数字（回転させない）。顔写真を登録したレベルには表示しない
+    if (t.photo) return;
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.fillStyle = shade(COLOR[level], 0.45);
