@@ -2,9 +2,15 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#f6e7cf">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="KANNA">
   <title>KANNA — 顔合体パズル</title>
-  <link rel="icon" href="data:,">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="stylesheet" href="src/style.css">
 </head>
 <body>
@@ -12,6 +18,12 @@
     <canvas id="game"></canvas>
 
     <div id="ui">
+      <!-- プレイ中のボタン -->
+      <div id="hud" hidden>
+        <button id="btn-pause" aria-label="一時停止">Ⅱ</button>
+        <button id="btn-sound" aria-label="音のオン・オフ">♪</button>
+      </div>
+
       <!-- タイトル -->
       <section id="scr-title" class="screen">
         <div class="panel">
@@ -20,6 +32,7 @@
           <button id="btn-start" class="primary">スタート</button>
           <button id="btn-rank">ランキング</button>
           <button id="btn-faces">顔ピース登録</button>
+          <p class="note" id="offline-note" hidden>✓ オフラインでも遊べます</p>
         </div>
       </section>
 
@@ -52,6 +65,16 @@
           <p class="note" id="rank-empty">まだ記録がありません</p>
           <button id="btn-rank-play" class="primary">遊ぶ</button>
           <button id="btn-rank-title">タイトルへ</button>
+        </div>
+      </section>
+
+      <!-- 一時停止 -->
+      <section id="scr-pause" class="screen">
+        <div class="panel">
+          <h2>一時停止</h2>
+          <button id="btn-resume" class="primary">続ける</button>
+          <button id="btn-restart">最初から</button>
+          <button id="btn-pause-title">タイトルへ</button>
         </div>
       </section>
 

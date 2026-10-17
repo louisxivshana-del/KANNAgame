@@ -1,4 +1,4 @@
-// KANNA — 顔合体パズル v0.3
+// KANNA — 顔合体パズル v0.4
 // 顔写真を登録したレベルは切り抜きの形、未登録のレベルは四角・丸・三角・しずくのピース。
 (() => {
   'use strict';
@@ -32,6 +32,8 @@
   let current, next, dropX, dropAngle, cooldown;
   let mergeQueue, particles, popups, overTimer, overAnim, now = 0;
   let maxReached, playTime, resultShown;
+  let rings = [], shake = 0, flash = 0;
+  let muted = (() => { try { return localStorage.getItem('kanna.muted') === '1'; } catch { return false; } })();
 
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
@@ -155,6 +157,7 @@
     state = play ? 'play' : 'title';
     score = 0;
     mergeQueue = []; particles = []; popups = [];
+    rings = []; shake = 0; flash = 0;
     overTimer = 0; overAnim = 0;
     maxReached = 0; playTime = 0; resultShown = false;
     best = Ranking.best();
@@ -202,24 +205,35 @@
         // 壁にめり込まないよう補正
         const hw = halfWidth(lv + 1, nb.angle);
         Body.setPosition(nb, { x: clamp(x, WALL_L + hw, WALL_R - hw), y: Math.min(y, FLOOR - RADIUS[lv + 1]) });
+        nb.pop = now; // ぽんっと膨らむ演出
         Composite.add(engine.world, nb);
         maxReached = Math.max(maxReached, lv + 1);
         addScore(MERGE_SCORE[lv], x, y);
-        burst(x, y, COLOR[lv + 1], 10 + lv * 2);
-        sound(330 * Math.pow(1.12, lv), 0.14, 'sine', 0.12);
+        burst(x, y, COLOR[lv + 1], 10 + lv * 3);
+        rings.push({ x, y, r: RADIUS[lv + 1] * 0.6, to: RADIUS[lv + 1] * 1.7, life: 0.35, max: 0.35, color: COLOR[lv + 1] });
+        if (lv >= 4) shake = Math.max(shake, lv * 1.2);
+        if (lv >= 6) vibrate(15);
+        mergeSound(lv + 1);
       } else {
-        addScore(VANISH_SCORE, x, y);
-        burst(x, y, COLOR[MAX_LEVEL], 40);
-        burst(x, y, '#ffffff', 20);
-        sound(660, 0.4, 'triangle', 0.15, 1320);
+        // Lv8 同士：消滅（大きな演出）
+        addScore(VANISH_SCORE, x, y, '消滅！');
+        burst(x, y, COLOR[MAX_LEVEL], 50);
+        burst(x, y, '#ffffff', 30);
+        burst(x, y, '#ffe066', 30);
+        rings.push({ x, y, r: 20, to: 260, life: 0.6, max: 0.6, color: '#ffffff' });
+        rings.push({ x, y, r: 10, to: 180, life: 0.5, max: 0.5, color: COLOR[MAX_LEVEL] });
+        shake = 16;
+        flash = 0.5;
+        vibrate([40, 30, 80]);
+        vanishSound();
       }
     }
     mergeQueue.length = 0;
   }
 
-  function addScore(pts, x, y) {
+  function addScore(pts, x, y, label = '') {
     score += pts;
-    popups.push({ x, y, text: `+${pts}`, life: 0.9 });
+    popups.push({ x, y, text: `${label}+${pts}`, life: label ? 1.4 : 0.9, big: !!label });
   }
 
   function checkOver(dt) {
@@ -248,12 +262,15 @@
 
   let audio = null;
   function initAudio() {
-    if (audio) return;
-    try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch { audio = null; }
+    if (!audio) {
+      try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch { audio = null; }
+    }
+    // スマホでは操作のたびに再開しないと音が止まっていることがある
+    if (audio && audio.state === 'suspended') audio.resume().catch(() => {});
   }
-  function sound(freq, dur, type, vol, to = 0) {
-    if (!audio) return;
-    const t = audio.currentTime, o = audio.createOscillator(), g = audio.createGain();
+  function sound(freq, dur, type, vol, to = 0, delay = 0) {
+    if (!audio || muted) return;
+    const t = audio.currentTime + delay, o = audio.createOscillator(), g = audio.createGain();
     o.type = type;
     o.frequency.setValueAtTime(freq, t);
     if (to) o.frequency.exponentialRampToValueAtTime(to, t + dur);
@@ -261,6 +278,22 @@
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
     o.connect(g).connect(audio.destination);
     o.start(t); o.stop(t + dur);
+  }
+
+  // 合体音：レベルが上がるほど高く、和音が厚くなる
+  const SCALE = [0, 2, 4, 7, 9, 12, 14, 16, 19]; // ペンタトニック
+  function mergeSound(level) {
+    const base = 392 * Math.pow(2, SCALE[level - 1] / 12);
+    sound(base, 0.18, 'sine', 0.12);
+    sound(base * 1.5, 0.16, 'triangle', 0.05, 0, 0.04);
+    if (level >= 5) sound(base * 2, 0.22, 'sine', 0.06, 0, 0.08);
+  }
+  function vanishSound() {
+    [523, 659, 784, 1047].forEach((f, i) => sound(f, 0.35, 'triangle', 0.12, 0, i * 0.08));
+    sound(1568, 0.6, 'sine', 0.06, 0, 0.32);
+  }
+  function vibrate(pattern) {
+    if (!muted && navigator.vibrate) { try { navigator.vibrate(pattern); } catch { /* ignore */ } }
   }
 
   // ---- 入力 ----
@@ -286,6 +319,7 @@
     dropPiece();
   });
   canvas.addEventListener('pointercancel', () => { pointerDown = false; });
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault()); // 長押しメニューを出さない
   window.addEventListener('keydown', (e) => {
     if (e.target instanceof HTMLInputElement) return; // 名前入力中はゲーム操作しない
     initAudio();
@@ -320,6 +354,8 @@
       }
       if (steps === 3) acc = 0;
       checkOver(dt);
+    } else if (state === 'pause') {
+      return; // 一時停止中は演出も止める
     } else if (state === 'over') {
       overAnim += dt;
       if (!resultShown && overAnim > 0.9) { resultShown = true; UI.showResult(); }
@@ -334,6 +370,11 @@
       popups[i].y -= 40 * dt;
       if ((popups[i].life -= dt) <= 0) popups.splice(i, 1);
     }
+    for (let i = rings.length - 1; i >= 0; i--) {
+      if ((rings[i].life -= dt) <= 0) rings.splice(i, 1);
+    }
+    shake = Math.max(0, shake - dt * 40);
+    flash = Math.max(0, flash - dt);
   }
 
   // ---- 描画 ----
@@ -351,6 +392,15 @@
     const n = parseInt(hex.slice(1), 16);
     const ch = (s) => clamp(Math.round(((n >> s) & 255) * f), 0, 255);
     return `rgb(${ch(16)},${ch(8)},${ch(0)})`;
+  }
+
+  // 合体直後のピースを 0.6 → 1.08 → 1 と膨らませる（見た目だけ。当たり判定は最初から実寸）
+  function popScale(b) {
+    if (!b.pop) return 1;
+    const t = (now - b.pop) / 0.2;
+    if (t >= 1) { b.pop = 0; return 1; }
+    const c = 2.2;
+    return 0.6 + 0.4 * (1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2));
   }
 
   // テンプレートを (x, y, angle, scale) に描く
@@ -405,6 +455,8 @@
     ctx.setTransform(scale * DPR, 0, 0, scale * DPR, 0, 0);
     ctx.fillStyle = '#f6e7cf';
     ctx.fillRect(0, 0, W, H);
+    ctx.save();
+    if (shake > 0) ctx.translate(rand(-shake, shake) * 0.5, rand(-shake, shake) * 0.5);
 
     // 箱
     ctx.fillStyle = '#fff8ec';
@@ -426,7 +478,7 @@
 
     // ピース
     for (const b of Composite.allBodies(engine.world)) {
-      if (b.level) drawPiece(b.level, b.position.x, b.position.y, b.angle);
+      if (b.level) drawPiece(b.level, b.position.x, b.position.y, b.angle, popScale(b));
     }
 
     // 落とす前のピース
@@ -446,14 +498,30 @@
       ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, Math.PI * 2); ctx.fill();
     }
     ctx.globalAlpha = 1;
+    for (const r of rings) {
+      const t = 1 - r.life / r.max;
+      ctx.globalAlpha = r.life / r.max;
+      ctx.strokeStyle = r.color;
+      ctx.lineWidth = 6 * (1 - t) + 1;
+      ctx.beginPath(); ctx.arc(r.x, r.y, r.r + (r.to - r.r) * (1 - (1 - t) * (1 - t)), 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
     ctx.textAlign = 'center';
-    ctx.font = 'bold 18px sans-serif';
     for (const p of popups) {
       ctx.globalAlpha = clamp(p.life * 2, 0, 1);
-      ctx.fillStyle = '#5a3b1f';
+      ctx.font = `bold ${p.big ? 30 : 18}px sans-serif`;
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = '#fff8ec';
+      ctx.strokeText(p.text, p.x, p.y);
+      ctx.fillStyle = p.big ? '#ff3b78' : '#5a3b1f';
       ctx.fillText(p.text, p.x, p.y);
     }
     ctx.globalAlpha = 1;
+    ctx.restore();
+    if (flash > 0) {
+      ctx.fillStyle = `rgba(255,255,255,${flash * 1.2})`;
+      ctx.fillRect(0, 0, W, H);
+    }
 
     drawHUD();
     if (state === 'over') drawOver();
@@ -591,7 +659,54 @@
     $('btn-rank-play').addEventListener('click', start);
     $('btn-rank-title').addEventListener('click', showTitle);
 
-    return { showTitle, showResult };
+    // ---- 一時停止 ----
+    function pause() {
+      if (state !== 'play') return;
+      state = 'pause';
+      pointerDown = false;
+      keys.clear();
+      show('scr-pause');
+    }
+    function resume() {
+      if (state !== 'pause') return;
+      initAudio();
+      state = 'play';
+      acc = 0;
+      show(null);
+    }
+    $('btn-pause').addEventListener('click', pause);
+    $('btn-resume').addEventListener('click', resume);
+    $('btn-restart').addEventListener('click', start);
+    $('btn-pause-title').addEventListener('click', showTitle);
+    // アプリを切り替えたり画面を消したりしたら自動で一時停止
+    document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
+    window.addEventListener('keydown', (e) => {
+      if (e.target instanceof HTMLInputElement) return;
+      if (e.code === 'Escape' || e.code === 'KeyP') { if (state === 'play') pause(); else resume(); }
+    });
+
+    // ---- 音のオン・オフ ----
+    const soundBtn = $('btn-sound');
+    function refreshSound() {
+      soundBtn.classList.toggle('off', muted);
+      soundBtn.setAttribute('aria-pressed', String(!muted));
+    }
+    soundBtn.addEventListener('click', () => {
+      muted = !muted;
+      try { localStorage.setItem('kanna.muted', muted ? '1' : '0'); } catch { /* ignore */ }
+      refreshSound();
+      initAudio();
+    });
+    refreshSound();
+
+    // プレイ中だけ上部ボタンを表示
+    const hud = $('hud');
+    function syncHud() {
+      const v = state !== 'play';
+      if (hud.hidden !== v) hud.hidden = v;
+    }
+
+    return { showTitle, showResult, syncHud };
   })();
 
   // ---- メインループ ----
@@ -601,6 +716,7 @@
     last = t;
     update(dtMs);
     render();
+    UI.syncHud();
     requestAnimationFrame(frame);
   }
 
@@ -609,6 +725,14 @@
     UI.showTitle();
     requestAnimationFrame(frame);
   });
+
+  // オフライン対応（Webサーバー経由で開いたときのみ）
+  if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+    navigator.serviceWorker.register('sw.js')
+      .then(() => navigator.serviceWorker.ready)
+      .then(() => { document.getElementById('offline-note').hidden = false; })
+      .catch((e) => console.info('オフライン対応を有効にできませんでした', e));
+  }
 
   // テスト・デバッグ用
   window.__kanna = {
