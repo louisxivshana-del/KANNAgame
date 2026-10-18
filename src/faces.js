@@ -239,7 +239,7 @@ const Faces = (() => {
     return { pts: resample(best.map((p) => ({ x: c.x + (p.x - c.x) * 1.05, y: c.y + (p.y - c.y) * 1.05 })), HANDLES), mask: null };
   }
 
-  // 顔のまわりを塗り分けて「髪＋顔の肌（耳を含む）」のうち顔とつながった部分を頭とする
+  // 顔のまわりを塗り分けて「髪＋顔の肌（耳を含む）＋帽子」のうち顔とつながった部分を頭とする
   async function segmentHead(canvas, ovalPts) {
     const segmenter = await headSegmenter();
     const b = bbox(ovalPts);
@@ -258,13 +258,23 @@ const Faces = (() => {
     const masks = res.confidenceMasks || [];
     if (masks.length < 4) { masks.forEach((m) => m.close()); return null; }
     const mw = masks[0].width, mh = masks[0].height;
-    const hair = masks[1].getAsFloat32Array(), face = masks[3].getAsFloat32Array();
-    const conf = new Float32Array(mw * mh);
-    for (let i = 0; i < conf.length; i++) conf[i] = Math.min(1, hair[i] + face[i]);
-    masks.forEach((m) => m.close());
-
     // 写真の座標 ⇔ マスクの座標
     const sx = mw / rw, sy = mh / rh;
+
+    // 0:背景 1:髪 2:体の肌 3:顔の肌 4:服 5:その他（帽子・メガネなどの小物）
+    const hair = masks[1].getAsFloat32Array(), face = masks[3].getAsFloat32Array();
+    const clothes = masks[4] ? masks[4].getAsFloat32Array() : null;
+    const others = masks[5] ? masks[5].getAsFloat32Array() : null;
+    // 帽子は「服」と判定されることもあるので、額より上にある服だけを帽子として含める
+    const hatLine = (b.y + b.h * 0.25 - ry0) * sy;
+    const conf = new Float32Array(mw * mh);
+    for (let i = 0; i < conf.length; i++) {
+      let v = hair[i] + face[i];
+      if (others) v += others[i];
+      if (clothes && i / mw < hatLine) v += clothes[i];
+      conf[i] = Math.min(1, v);
+    }
+    masks.forEach((m) => m.close());
     const toM = (p) => ({ x: (p.x - rx0) * sx, y: (p.y - ry0) * sy });
     const fromM = (x, y) => ({ x: x / sx + rx0, y: y / sy + ry0 });
 
@@ -659,6 +669,8 @@ const Faces = (() => {
       };
       let saved = true;
       try { await dbPut(rec); } catch { saved = false; }
+      // ブラウザが容量不足などで自動削除しないよう、保存データの保持をお願いする
+      try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch { /* ignore */ }
       setCache(rec.level, await blobToImage(rec.crop), rec);
       ed.busy = false;
       ed.work = null;
