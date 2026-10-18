@@ -77,11 +77,25 @@
     const k = Math.sqrt((Math.PI * r * r) / Math.abs(Faces.area(pts)));
     const c = Faces.centroid(pts);
     const tr = (p) => ({ x: (p.x - c.x) * k, y: (p.y - c.y) * k });
+    // 切り抜いた形にぴったり沿ったレベル色のふちを付けた画像を作る（ステッカー風）
+    const pad = Math.ceil(2.5 / k);
+    const out = document.createElement('canvas');
+    out.width = face.w + pad * 2;
+    out.height = face.h + pad * 2;
+    const o = out.getContext('2d');
+    for (let a = 0; a < 16; a++) {
+      const t = (a / 16) * Math.PI * 2;
+      o.drawImage(face.img, pad + Math.cos(t) * pad, pad + Math.sin(t) * pad);
+    }
+    o.globalCompositeOperation = 'source-in';
+    o.fillStyle = COLOR[level];
+    o.fillRect(0, 0, out.width, out.height);
+    o.globalCompositeOperation = 'source-over';
+    o.drawImage(face.img, pad, pad);
     return {
-      img: face.img,
+      img: out,
       verts: pts.map(tr),
-      outline: face.poly.map(tr),
-      ox: -c.x * k, oy: -c.y * k, dw: face.w * k, dh: face.h * k,
+      ox: (-c.x - pad) * k, oy: (-c.y - pad) * k, dw: out.width * k, dh: out.height * k,
     };
   }
 
@@ -412,13 +426,8 @@
     ctx.rotate(angle);
     ctx.scale(s, s);
     if (t.photo) {
-      // 顔ピース：切り抜き画像＋レベル色のふち（数字は書かない）
+      // 顔ピース：レベル色のふち付きの切り抜き画像（数字は書かない）
       ctx.drawImage(t.img, t.ox, t.oy, t.dw, t.dh);
-      ctx.beginPath();
-      Faces.tracePath(ctx, t.outline);
-      ctx.lineWidth = 2.5;
-      ctx.strokeStyle = COLOR[level];
-      ctx.stroke();
       ctx.restore();
       return;
     }

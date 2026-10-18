@@ -1,5 +1,5 @@
 // オフライン対応：初回にすべてのファイルを端末に保存し、以後はネットなしで起動できるようにする
-const VERSION = 'kanna-v0.5.0';
+const VERSION = 'kanna-v0.6.0';
 const FILES = [
   './',
   'index.html',
@@ -15,7 +15,7 @@ const FILES = [
   'vendor/mediapipe/wasm/vision_wasm_internal.js',
   'vendor/mediapipe/wasm/vision_wasm_internal.wasm',
   'vendor/mediapipe/face_landmarker.task',
-  'vendor/mediapipe/hair_segmenter.tflite',
+  'vendor/mediapipe/selfie_multiclass.tflite',
   'icons/icon-192.png',
   'icons/icon-512.png',
   'icons/icon-maskable-512.png',

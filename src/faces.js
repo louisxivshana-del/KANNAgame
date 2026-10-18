@@ -1,4 +1,4 @@
-// 顔ピース：写真の登録・顔の自動切り抜き・手動調整・端末内保存（IndexedDB）
+// 顔ピース：写真の登録・頭の自動切り抜き・手動調整・端末内保存（IndexedDB）
 // 写真はすべて端末の中だけで処理し、外部には送信しない。
 const Faces = (() => {
   'use strict';
@@ -154,7 +154,7 @@ const Faces = (() => {
 
   // ---- 顔と髪の自動検出（MediaPipe・端末内で実行） ----
   const url = (p) => new URL(p, document.baseURI).href;
-  let visionPromise = null, detectorPromise = null, hairPromise = null;
+  let visionPromise = null, detectorPromise = null;
 
   function visionTasks() {
     if (!visionPromise) {
@@ -184,21 +184,22 @@ const Faces = (() => {
     return detectorPromise;
   }
 
-  // 髪の毛の領域を塗り分けるモデル
-  function hairSegmenter() {
-    if (!hairPromise) {
-      hairPromise = (async () => {
+  // 人物を「髪・顔の肌・体の肌・服・背景…」に塗り分けるモデル（頭＝髪＋顔の肌）
+  let headPromise = null;
+  function headSegmenter() {
+    if (!headPromise) {
+      headPromise = (async () => {
         const { vision, fileset } = await visionTasks();
         return vision.ImageSegmenter.createFromOptions(fileset, {
-          baseOptions: { modelAssetPath: url('vendor/mediapipe/hair_segmenter.tflite') },
+          baseOptions: { modelAssetPath: url('vendor/mediapipe/selfie_multiclass.tflite') },
           runningMode: 'IMAGE',
           outputCategoryMask: false,
           outputConfidenceMasks: true,
         });
       })();
-      hairPromise.catch(() => { hairPromise = null; });
+      headPromise.catch(() => { headPromise = null; });
     }
-    return hairPromise;
+    return headPromise;
   }
 
   // フェイスライン（線のつながり）を一周の点の順番に並べる
@@ -212,9 +213,10 @@ const Faces = (() => {
     return order;
   }
 
-  // 一番大きく写っている顔を切り抜く。withHair なら髪の毛も含める。
-  // 戻り値 { pts, hair }（hair: 髪を含められたか）。顔が見つからなければ null
-  async function detectFace(canvas, withHair = true) {
+  // 一番大きく写っている人の頭（mode='head'）または顔だけ（mode='face'）を切り抜く。
+  // 戻り値 { pts, mask }。mask は頭の形の透明度マスク（写真と同じ大きさのキャンバス、顔だけのときは null）。
+  // 顔が見つからなければ null
+  async function detectFace(canvas, mode = 'head') {
     const { landmarker, oval } = await detector();
     const result = landmarker.detect(canvas);
     let best = null, bestArea = 0;
@@ -224,92 +226,107 @@ const Faces = (() => {
       if (a > bestArea) { bestArea = a; best = pts; }
     }
     if (!best) return null;
-    if (withHair) {
+    if (mode === 'head') {
       try {
-        const pts = await faceWithHair(canvas, best);
-        if (pts) return { pts, hair: true };
+        const head = await segmentHead(canvas, best);
+        if (head) return head;
       } catch (e) {
-        console.info('髪の検出を使えません', e);
+        console.info('頭の切り抜きを使えません', e);
       }
     }
     const c = centroid(best);
     // フェイスラインのわずかに外側で切り抜く
-    return { pts: resample(best.map((p) => ({ x: c.x + (p.x - c.x) * 1.05, y: c.y + (p.y - c.y) * 1.05 })), HANDLES), hair: false };
+    return { pts: resample(best.map((p) => ({ x: c.x + (p.x - c.x) * 1.05, y: c.y + (p.y - c.y) * 1.05 })), HANDLES), mask: null };
   }
 
-  // 顔のまわりを髪のモデルで調べ、「顔＋つながった髪」の外側の輪郭を作る
-  async function faceWithHair(canvas, ovalPts) {
-    const segmenter = await hairSegmenter();
+  // 顔のまわりを塗り分けて「髪＋顔の肌（耳を含む）」のうち顔とつながった部分を頭とする
+  async function segmentHead(canvas, ovalPts) {
+    const segmenter = await headSegmenter();
     const b = bbox(ovalPts);
     const fc = centroid(ovalPts);
-    // 顔のまわりを広めに切り出して調べる（髪は上と横に広がる）
-    const rx0 = Math.max(0, b.x - b.w * 1.3), rx1 = Math.min(canvas.width, b.x + b.w * 2.3);
-    const ry0 = Math.max(0, b.y - b.h * 1.1), ry1 = Math.min(canvas.height, b.y + b.h * 2.0);
+    // 頭のまわりを広めに切り出す（髪は上と横、長い髪は下にも広がる）
+    const rx0 = Math.max(0, b.x - b.w * 1.4), rx1 = Math.min(canvas.width, b.x + b.w * 2.4);
+    const ry0 = Math.max(0, b.y - b.h * 1.2), ry1 = Math.min(canvas.height, b.y + b.h * 2.2);
     const rw = rx1 - rx0, rh = ry1 - ry0;
     const k = Math.min(1, 512 / Math.max(rw, rh));
-    const mw = Math.max(1, Math.round(rw * k)), mh = Math.max(1, Math.round(rh * k));
     const region = document.createElement('canvas');
-    region.width = mw; region.height = mh;
-    region.getContext('2d').drawImage(canvas, rx0, ry0, rw, rh, 0, 0, mw, mh);
+    region.width = Math.max(1, Math.round(rw * k));
+    region.height = Math.max(1, Math.round(rh * k));
+    region.getContext('2d').drawImage(canvas, rx0, ry0, rw, rh, 0, 0, region.width, region.height);
 
     const res = segmenter.segment(region);
     const masks = res.confidenceMasks || [];
-    const hairMask = masks[masks.length - 1];
-    if (!hairMask) { masks.forEach((m) => m.close()); return null; }
-    const conf = hairMask.getAsFloat32Array();
-    const cw = hairMask.width, ch = hairMask.height;
-
-    // 顔（フェイスライン内側）＋髪 のマスク
-    const toMask = (p) => ({ x: (p.x - rx0) * k * (cw / mw), y: (p.y - ry0) * k * (ch / mh) });
-    const faceCanvas = document.createElement('canvas');
-    faceCanvas.width = cw; faceCanvas.height = ch;
-    const fctx = faceCanvas.getContext('2d');
-    // フェイスラインは額の上部や耳を含まないので、少し広げて髪とのすき間を埋める
-    const grown = ovalPts.map((p) => ({ x: fc.x + (p.x - fc.x) * 1.12, y: fc.y + (p.y - fc.y) * 1.12 }));
-    fctx.beginPath();
-    tracePath(fctx, grown.map(toMask));
-    fctx.fill();
-    const faceAlpha = fctx.getImageData(0, 0, cw, ch).data;
-    const mask = new Uint8Array(cw * ch);
-    let hairCount = 0;
-    for (let i = 0; i < cw * ch; i++) {
-      const hair = conf[i] > 0.5;
-      if (hair) hairCount++;
-      mask[i] = hair || faceAlpha[i * 4 + 3] > 127 ? 1 : 0;
-    }
+    if (masks.length < 4) { masks.forEach((m) => m.close()); return null; }
+    const mw = masks[0].width, mh = masks[0].height;
+    const hair = masks[1].getAsFloat32Array(), face = masks[3].getAsFloat32Array();
+    const conf = new Float32Array(mw * mh);
+    for (let i = 0; i < conf.length; i++) conf[i] = Math.min(1, hair[i] + face[i]);
     masks.forEach((m) => m.close());
 
-    const mb = bbox(ovalPts.map(toMask));
-    const faceR = Math.max(mb.w, mb.h) / 2;
-    if (hairCount < faceR * faceR * 0.15) return null; // 髪がほとんど見つからない（坊主・帽子など）
+    // 写真の座標 ⇔ マスクの座標
+    const sx = mw / rw, sy = mh / rh;
+    const toM = (p) => ({ x: (p.x - rx0) * sx, y: (p.y - ry0) * sy });
+    const fromM = (x, y) => ({ x: x / sx + rx0, y: y / sy + ry0 });
 
-    // 顔の中心から放射状に線を伸ばし、マスクが途切れるところまでを輪郭とする
-    const c = toMask(fc);
-    const N = 96, gapTol = Math.max(3, faceR * 0.3), maxD = faceR * 2.4;
+    // 顔の中心からつながっている部分だけを残す（背景や他の人を除く）
+    const c = toM(fc);
+    const start = Math.round(c.y) * mw + Math.round(c.x);
+    if (!(conf[start] > 0.5)) return null;
+    const keep = new Uint8Array(mw * mh);
+    const stack = [start];
+    keep[start] = 1;
+    let count = 0;
+    while (stack.length) {
+      const i = stack.pop();
+      count++;
+      const x = i % mw, y = (i - x) / mw;
+      const nb = [x > 0 ? i - 1 : -1, x < mw - 1 ? i + 1 : -1, y > 0 ? i - mw : -1, y < mh - 1 ? i + mw : -1];
+      for (const n of nb) if (n >= 0 && !keep[n] && conf[n] > 0.5) { keep[n] = 1; stack.push(n); }
+    }
+    const faceArea = Math.abs(area(ovalPts.map(toM)));
+    if (count < faceArea * 0.6) return null; // 顔より小さい＝うまく塗り分けられていない
+
+    // ふちはなめらかに：残した部分の1ピクセル外側までは確率をそのまま透明度に使う
+    const alpha = new Uint8ClampedArray(mw * mh * 4);
+    for (let i = 0; i < mw * mh; i++) {
+      let near = keep[i];
+      if (!near) {
+        const x = i % mw;
+        near = (x > 0 && keep[i - 1]) || (x < mw - 1 && keep[i + 1]) || keep[i - mw] || keep[i + mw];
+      }
+      alpha[i * 4 + 3] = near ? Math.round(conf[i] * 255) : 0;
+    }
+    const small = document.createElement('canvas');
+    small.width = mw; small.height = mh;
+    small.getContext('2d').putImageData(new ImageData(alpha, mw, mh), 0, 0);
+    const mask = document.createElement('canvas');
+    mask.width = canvas.width; mask.height = canvas.height;
+    const mctx = mask.getContext('2d');
+    mctx.imageSmoothingQuality = 'high';
+    mctx.drawImage(small, rx0, ry0, rw, rh);
+
+    // 調整用の枠：頭の外形を放射状に測って点にする（少し外側に置き、マスクを切らないようにする）
+    const N = 120, maxD = Math.hypot(mw, mh);
     const radii = [];
     for (let a = 0; a < N; a++) {
       const t = (a / N) * Math.PI * 2;
       const dx = Math.cos(t), dy = Math.sin(t);
-      let last = 0, gap = 0;
-      for (let d = 0; d < maxD; d += 1) {
+      let last = 0;
+      for (let d = 0; d < maxD; d += 0.5) {
         const x = Math.round(c.x + dx * d), y = Math.round(c.y + dy * d);
-        if (x < 0 || y < 0 || x >= cw || y >= ch) break;
-        if (mask[y * cw + x]) { last = d; gap = 0; } else if (++gap > gapTol) break;
+        if (x < 0 || y < 0 || x >= mw || y >= mh) break;
+        if (keep[y * mw + x]) last = d;
       }
       radii.push(last);
     }
-    // とげとげを抑える（中央値 → 平均でならす）
-    const at = (arr, i) => arr[(i + arr.length) % arr.length];
-    const med = radii.map((_, i) => [-2, -1, 0, 1, 2].map((o) => at(radii, i + o)).sort((p, q) => p - q)[2]);
-    const smooth = med.map((_, i) => (at(med, i - 1) + at(med, i) + at(med, i + 1)) / 3);
-
-    const back = (x, y) => ({ x: x / (k * (cw / mw)) + rx0, y: y / (k * (ch / mh)) + ry0 });
-    const pts = smooth.map((r, i) => {
+    const at = (i) => radii[(i + N) % N];
+    const outer = radii.map((_, i) => Math.max(at(i - 1), at(i), at(i + 1))); // 角を外側にふくらませる
+    const pad = 3 * Math.max(sx, sy);
+    const pts = outer.map((r, i) => {
       const t = (i / N) * Math.PI * 2;
-      const rr = r * 1.03 + 1;
-      return back(c.x + Math.cos(t) * rr, c.y + Math.sin(t) * rr);
+      return fromM(c.x + Math.cos(t) * (r + pad), c.y + Math.sin(t) * (r + pad));
     });
-    return resample(pts, HANDLES);
+    return { pts: resample(pts, HANDLES), mask };
   }
 
   function defaultHandles(w, h) {
@@ -381,7 +398,7 @@ const Faces = (() => {
   async function reEdit(lv) {
     try {
       const rec = await dbGet(lv);
-      if (rec) openEditor(lv, rec.original, rec.handles);
+      if (rec) openEditor(lv, rec.original, rec.handles, rec.mask);
     } catch {
       alert('保存した写真を読み込めませんでした');
     }
@@ -397,10 +414,24 @@ const Faces = (() => {
   }
 
   // ---- 切り抜き調整画面 ----
-  const ed = { level: 0, work: null, handles: [], view: { s: 1, ox: 0, oy: 0 }, drag: null, busy: false };
+  // mask: 頭の形の透明度（写真と同じ大きさ）、cutout: 写真にマスクを適用したもの（頭だけ）
+  const ed = { level: 0, work: null, mask: null, cutout: null, handles: [], view: { s: 1, ox: 0, oy: 0 }, drag: null, busy: false };
+
+  function setMask(mask) {
+    ed.mask = mask;
+    ed.cutout = null;
+    if (!mask || !ed.work) return;
+    const c = document.createElement('canvas');
+    c.width = ed.work.width; c.height = ed.work.height;
+    const x = c.getContext('2d');
+    x.drawImage(ed.work, 0, 0);
+    x.globalCompositeOperation = 'destination-in';
+    x.drawImage(mask, 0, 0, c.width, c.height);
+    ed.cutout = c;
+  }
   let edCanvas, edCtx, cssSize = 300, dpr = 1;
 
-  async function openEditor(level, blob, handles = null) {
+  async function openEditor(level, blob, handles = null, maskBlob = null) {
     ed.level = level;
     $('editor-title').textContent = `Lv${level} の切り抜き`;
     Screens.show('scr-editor');
@@ -414,6 +445,14 @@ const Faces = (() => {
       c.height = Math.round(img.naturalHeight * k);
       c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
       ed.work = c;
+      setMask(null);
+      if (maskBlob) {
+        const mimg = await blobToImage(maskBlob, false);
+        const m = document.createElement('canvas');
+        m.width = c.width; m.height = c.height;
+        m.getContext('2d').drawImage(mimg, 0, 0, c.width, c.height);
+        setMask(m);
+      }
     } catch {
       status('写真を読み込めませんでした');
       ed.work = null;
@@ -428,22 +467,24 @@ const Faces = (() => {
     }
   }
 
-  async function autoDetect(withHair = true) {
+  async function autoDetect(mode = 'head') {
     if (!ed.work || ed.busy) return;
     ed.busy = true;
-    status(withHair ? '顔と髪を探しています…' : '顔を探しています…');
+    status(mode === 'head' ? '頭を探しています…' : '顔を探しています…');
     drawEditor();
     let found = null, failed = false;
-    try { found = await detectFace(ed.work, withHair); } catch (e) { failed = true; console.info('顔検出を使えません', e); }
+    try { found = await detectFace(ed.work, mode); } catch (e) { failed = true; console.info('顔検出を使えません', e); }
     ed.busy = false;
     ed.handles = found ? found.pts : defaultHandles(ed.work.width, ed.work.height);
+    setMask(found ? found.mask : null);
     fitView();
-    if (found && found.hair) status('顔と髪を切り抜きました。点をドラッグして調整できます');
-    else if (found && withHair) status('顔を切り抜きました（髪は見つかりませんでした）。点をドラッグして調整できます');
+    if (found && found.mask) status('頭を切り抜きました。枠の点を内側に動かすと削れます');
+    else if (found && mode === 'head') status('顔を切り抜きました（頭の形はうまく取れませんでした）。点をドラッグして調整できます');
     else if (found) status('顔だけを切り抜きました。点をドラッグして調整できます');
     else if (failed) status('自動切り抜きを使えません。枠を動かして顔に合わせてください');
     else status('顔が見つかりませんでした。枠を動かして顔に合わせてください');
   }
+
 
   function status(text) { $('editor-status').textContent = text; }
 
@@ -482,12 +523,26 @@ const Faces = (() => {
     c.restore();
     if (!ed.handles.length) return;
     const sp = ed.handles.map(toScreen);
-    // 切り抜き枠の外側を暗くする
-    c.beginPath();
-    c.rect(0, 0, cssSize, cssSize);
-    tracePath(c, sp);
-    c.fillStyle = 'rgba(20,10,0,0.6)';
-    c.fill('evenodd');
+    if (ed.cutout) {
+      // 頭の切り抜き：全体を暗くして、枠の内側の頭だけを明るく表示
+      c.fillStyle = 'rgba(20,10,0,0.65)';
+      c.fillRect(0, 0, cssSize, cssSize);
+      c.save();
+      c.beginPath();
+      tracePath(c, sp);
+      c.clip();
+      c.translate(ed.view.ox, ed.view.oy);
+      c.scale(ed.view.s, ed.view.s);
+      c.drawImage(ed.cutout, 0, 0);
+      c.restore();
+    } else {
+      // 切り抜き枠の外側を暗くする
+      c.beginPath();
+      c.rect(0, 0, cssSize, cssSize);
+      tracePath(c, sp);
+      c.fillStyle = 'rgba(20,10,0,0.6)';
+      c.fill('evenodd');
+    }
     c.beginPath();
     tracePath(c, sp);
     c.strokeStyle = '#ff8fab';
@@ -567,10 +622,10 @@ const Faces = (() => {
     };
     $('ed-bigger').addEventListener('click', () => scaleShape(1.08));
     $('ed-smaller').addEventListener('click', () => scaleShape(1 / 1.08));
-    $('ed-auto').addEventListener('click', () => autoDetect(true));
-    $('ed-auto-face').addEventListener('click', () => autoDetect(false));
+    $('ed-auto').addEventListener('click', () => autoDetect('head'));
+    $('ed-auto-face').addEventListener('click', () => autoDetect('face'));
     $('ed-fit').addEventListener('click', fitView);
-    $('ed-cancel').addEventListener('click', () => { ed.work = null; openManager(onClose); });
+    $('ed-cancel').addEventListener('click', () => { ed.work = null; setMask(null); openManager(onClose); });
     $('ed-save').addEventListener('click', save);
   }
 
@@ -590,7 +645,7 @@ const Faces = (() => {
       c.beginPath();
       tracePath(c, ed.handles);
       c.clip();
-      c.drawImage(ed.work, 0, 0);
+      c.drawImage(ed.cutout || ed.work, 0, 0);
       const rec = {
         level: ed.level,
         crop: await canvasToBlob(crop, 'image/png'),
@@ -599,6 +654,7 @@ const Faces = (() => {
         cropPoly: ed.handles.map((p) => ({ x: (p.x - b.x) * k, y: (p.y - b.y) * k })),
         original: await canvasToBlob(ed.work, 'image/jpeg', 0.9),
         handles: ed.handles.map((p) => ({ ...p })),
+        mask: ed.mask ? await canvasToBlob(ed.mask, 'image/png') : null,
         updated: Date.now(),
       };
       let saved = true;
@@ -606,6 +662,7 @@ const Faces = (() => {
       setCache(rec.level, await blobToImage(rec.crop), rec);
       ed.busy = false;
       ed.work = null;
+      setMask(null);
       if (!saved) alert('この環境では端末に保存できませんでした（このプレイ中だけ使えます）');
       openManager(onClose);
     } catch (e) {
