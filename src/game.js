@@ -17,7 +17,8 @@
 
   // ---- レベル定義 ----
   const MAX_LEVEL = 8;
-  const RADIUS = [0, 17, 23, 30, 38, 48, 59, 72, 86];               // [1..8]
+  const SIZE_SCALE = 1.5;   // ピースの大きさの倍率（難易度）
+  const RADIUS = [0, 17, 23, 30, 38, 48, 59, 72, 86].map(r => r * SIZE_SCALE); // [1..8]
   const COLOR = [null, '#ff8fab', '#ffb347', '#ffe066', '#9be15d',
     '#4cc9f0', '#7b8cff', '#c77dff', '#ff5d8f'];
   const MERGE_SCORE = [0, 1, 3, 6, 10, 15, 21, 28];                 // LvN+LvN → N+1
