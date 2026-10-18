@@ -1,5 +1,5 @@
 // オフライン対応：初回にすべてのファイルを端末に保存し、以後はネットなしで起動できるようにする
-const VERSION = 'kanna-v0.7.0';
+const VERSION = 'kanna-v0.7.1';
 const FILES = [
   './',
   'index.html',

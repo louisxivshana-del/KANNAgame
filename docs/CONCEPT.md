@@ -1,4 +1,4 @@
-# KANNA — 顔合体パズル　ゲーム構想書（v2）
+# おちgame — 顔合体パズル　ゲーム構想書（v2）
 
 > 旧構想「夜明けのランタン」は `docs/archive/CONCEPT_lantern.md` に保管。
 
