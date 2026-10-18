@@ -276,25 +276,35 @@ const Faces = (() => {
     }
     masks.forEach((m) => m.close());
     const toM = (p) => ({ x: (p.x - rx0) * sx, y: (p.y - ry0) * sy });
+    const faceArea = Math.abs(area(ovalPts.map(toM)));
+    // 顔の中心からつながっている部分だけを残す。顔より小さければうまく塗り分けられていない
+    return buildCutout({ conf, mw, mh, rx0, ry0, rw, rh, seed: toM(fc), minCount: faceArea * 0.6, outW: canvas.width, outH: canvas.height });
+  }
+
+  // 確率マスク conf（mw×mh、写真の (rx0, ry0, rw, rh) の範囲に対応）から、seed とつながった部分を切り抜く。
+  // 戻り値 { pts: 調整用の枠, mask: 写真と同じ大きさの透明度マスク }、失敗時は null
+  function buildCutout({ conf, mw, mh, rx0, ry0, rw, rh, seed, minCount, outW, outH }) {
+    const sx = mw / rw, sy = mh / rh;
     const fromM = (x, y) => ({ x: x / sx + rx0, y: y / sy + ry0 });
 
-    // 顔の中心からつながっている部分だけを残す（背景や他の人を除く）
-    const c = toM(fc);
-    const start = Math.round(c.y) * mw + Math.round(c.x);
+    // seed からつながっている部分だけを残す（背景や他の人・動物を除く）
+    const sxi = Math.min(mw - 1, Math.max(0, Math.round(seed.x)));
+    const syi = Math.min(mh - 1, Math.max(0, Math.round(seed.y)));
+    const start = syi * mw + sxi;
     if (!(conf[start] > 0.5)) return null;
     const keep = new Uint8Array(mw * mh);
     const stack = [start];
     keep[start] = 1;
-    let count = 0;
+    let count = 0, cx = 0, cy = 0;
     while (stack.length) {
       const i = stack.pop();
-      count++;
       const x = i % mw, y = (i - x) / mw;
+      count++; cx += x; cy += y;
       const nb = [x > 0 ? i - 1 : -1, x < mw - 1 ? i + 1 : -1, y > 0 ? i - mw : -1, y < mh - 1 ? i + mw : -1];
       for (const n of nb) if (n >= 0 && !keep[n] && conf[n] > 0.5) { keep[n] = 1; stack.push(n); }
     }
-    const faceArea = Math.abs(area(ovalPts.map(toM)));
-    if (count < faceArea * 0.6) return null; // 顔より小さい＝うまく塗り分けられていない
+    if (count < minCount) return null;
+    const c = { x: cx / count, y: cy / count };
 
     // ふちはなめらかに：残した部分の1ピクセル外側までは確率をそのまま透明度に使う
     const alpha = new Uint8ClampedArray(mw * mh * 4);
@@ -310,12 +320,12 @@ const Faces = (() => {
     small.width = mw; small.height = mh;
     small.getContext('2d').putImageData(new ImageData(alpha, mw, mh), 0, 0);
     const mask = document.createElement('canvas');
-    mask.width = canvas.width; mask.height = canvas.height;
+    mask.width = outW; mask.height = outH;
     const mctx = mask.getContext('2d');
     mctx.imageSmoothingQuality = 'high';
     mctx.drawImage(small, rx0, ry0, rw, rh);
 
-    // 調整用の枠：頭の外形を放射状に測って点にする（少し外側に置き、マスクを切らないようにする）
+    // 調整用の枠：外形を中心から放射状に測って点にする（少し外側に置き、マスクを切らないようにする）
     const N = 120, maxD = Math.hypot(mw, mh);
     const radii = [];
     for (let a = 0; a < N; a++) {
@@ -337,6 +347,42 @@ const Faces = (() => {
       return fromM(c.x + Math.cos(t) * (r + pad), c.y + Math.sin(t) * (r + pad));
     });
     return { pts: resample(pts, HANDLES), mask };
+  }
+
+  // タップした場所にあるもの（動物・物など何でも）を切り抜くモデル
+  let tapPromise = null;
+  function tapSegmenter() {
+    if (!tapPromise) {
+      tapPromise = (async () => {
+        const { vision, fileset } = await visionTasks();
+        return vision.InteractiveSegmenter.createFromOptions(fileset, {
+          baseOptions: { modelAssetPath: url('vendor/mediapipe/magic_touch.tflite') },
+          outputCategoryMask: false,
+          outputConfidenceMasks: true,
+        });
+      })();
+      tapPromise.catch(() => { tapPromise = null; });
+    }
+    return tapPromise;
+  }
+
+  // 写真の point（写真の座標）にあるものを切り抜く
+  async function segmentAt(canvas, point) {
+    const segmenter = await tapSegmenter();
+    const k = Math.min(1, 768 / Math.max(canvas.width, canvas.height));
+    const small = document.createElement('canvas');
+    small.width = Math.round(canvas.width * k);
+    small.height = Math.round(canvas.height * k);
+    small.getContext('2d').drawImage(canvas, 0, 0, small.width, small.height);
+    const res = segmenter.segment(small, { keypoint: { x: point.x / canvas.width, y: point.y / canvas.height } });
+    const masks = res.confidenceMasks || [];
+    const m = masks[masks.length - 1];
+    if (!m) { masks.forEach((x) => x.close()); return null; }
+    const mw = m.width, mh = m.height;
+    const conf = m.getAsFloat32Array().slice();
+    masks.forEach((x) => x.close());
+    const seed = { x: (point.x / canvas.width) * mw, y: (point.y / canvas.height) * mh };
+    return buildCutout({ conf, mw, mh, rx0: 0, ry0: 0, rw: canvas.width, rh: canvas.height, seed, minCount: 50, outW: canvas.width, outH: canvas.height });
   }
 
   function defaultHandles(w, h) {
@@ -425,7 +471,33 @@ const Faces = (() => {
 
   // ---- 切り抜き調整画面 ----
   // mask: 頭の形の透明度（写真と同じ大きさ）、cutout: 写真にマスクを適用したもの（頭だけ）
-  const ed = { level: 0, work: null, mask: null, cutout: null, handles: [], view: { s: 1, ox: 0, oy: 0 }, drag: null, busy: false };
+  const ed = { level: 0, work: null, mask: null, cutout: null, handles: [], view: { s: 1, ox: 0, oy: 0 }, drag: null, busy: false, tapMode: false };
+
+  function setTapMode(on) {
+    ed.tapMode = on;
+    $('ed-tap').classList.toggle('primary', on);
+    if (on) status('切り抜きたいもの（動物など）をタップしてください');
+    drawEditor();
+  }
+
+  async function tapCut(p) {
+    if (!ed.work || ed.busy) return;
+    ed.busy = true;
+    setTapMode(false);
+    status('切り抜いています…');
+    let found = null, failed = false;
+    try { found = await segmentAt(ed.work, p); } catch (e) { failed = true; console.info('タップ切り抜きを使えません', e); }
+    ed.busy = false;
+    if (found) {
+      ed.handles = found.pts;
+      setMask(found.mask);
+      fitView();
+      status('切り抜きました。枠の点を内側に動かすと削れます（頭だけにしたいときなど）');
+    } else {
+      status(failed ? 'この環境ではタップ切り抜きを使えません' : 'うまく切り抜けませんでした。別の場所をタップしてください');
+      if (!failed) setTapMode(true);
+    }
+  }
 
   function setMask(mask) {
     ed.mask = mask;
@@ -443,6 +515,7 @@ const Faces = (() => {
 
   async function openEditor(level, blob, handles = null, maskBlob = null) {
     ed.level = level;
+    setTapMode(false);
     $('editor-title').textContent = `Lv${level} の切り抜き`;
     Screens.show('scr-editor');
     sizeEditor();
@@ -488,6 +561,12 @@ const Faces = (() => {
     ed.handles = found ? found.pts : defaultHandles(ed.work.width, ed.work.height);
     setMask(found ? found.mask : null);
     fitView();
+    if (!found && !failed) {
+      // 人の顔がない写真（動物など）は、タップして選んでもらう
+      setTapMode(true);
+      status('人の顔が見つかりませんでした。動物などは、切り抜きたいものをタップしてください');
+      return;
+    }
     if (found && found.mask) status('頭を切り抜きました。枠の点を内側に動かすと削れます');
     else if (found && mode === 'head') status('顔を切り抜きました（頭の形はうまく取れませんでした）。点をドラッグして調整できます');
     else if (found) status('顔だけを切り抜きました。点をドラッグして調整できます');
@@ -580,6 +659,7 @@ const Faces = (() => {
     edCanvas.addEventListener('pointerdown', (e) => {
       if (!ed.work || ed.busy) return;
       const p = edPointer(e);
+      if (ed.tapMode) { tapCut(toImage(p)); return; }
       edCanvas.setPointerCapture(e.pointerId);
       let best = -1, bestD = 22;
       ed.handles.forEach((h, i) => {
@@ -634,8 +714,9 @@ const Faces = (() => {
     $('ed-smaller').addEventListener('click', () => scaleShape(1 / 1.08));
     $('ed-auto').addEventListener('click', () => autoDetect('head'));
     $('ed-auto-face').addEventListener('click', () => autoDetect('face'));
+    $('ed-tap').addEventListener('click', () => setTapMode(!ed.tapMode));
     $('ed-fit').addEventListener('click', fitView);
-    $('ed-cancel').addEventListener('click', () => { ed.work = null; setMask(null); openManager(onClose); });
+    $('ed-cancel').addEventListener('click', () => { ed.work = null; setMask(null); setTapMode(false); openManager(onClose); });
     $('ed-save').addEventListener('click', save);
   }
 
